@@ -146,6 +146,10 @@ def main():
     # 生成额外图表
     if args.save_plots:
         try:
+            analyzer.plot_od_matrix_heatmap(
+                save_path=os.path.join(args.output_dir, "od_heatmap.png"),
+                show=False
+            )
             analyzer.plot_agent_type_distribution(
                 save_path=os.path.join(args.output_dir, "agent_distribution.png"),
                 show=False
@@ -156,6 +160,10 @@ def main():
             )
             analyzer.plot_order_cumulative(
                 save_path=os.path.join(args.output_dir, "order_cumulative.png"),
+                show=False
+            )
+            analyzer.plot_sensitivity_comparison(
+                save_path=os.path.join(args.output_dir, "sensitivity_comparison.png"),
                 show=False
             )
             print("额外图表已保存")

@@ -76,6 +76,156 @@ class SimulationAnalyzer:
         
         return fig
     
+    def plot_od_matrix_heatmap(self, save_path: str = None, show: bool = True):
+        """
+        绘制 OD 矩阵热力图 (R -> S/D)
+
+        显示 R1-R3 到 S1-S3(D1-D3) 的订单量分布
+        """
+        # 选取前3个餐厅与宿舍
+        restaurants = [r for r in config.NODE_RESTAURANTS if r.startswith("R")][:3]
+        dorms = [d for d in config.NODE_DORMITORIES if d.startswith("D")][:3]
+
+        # 统计矩阵
+        matrix = np.zeros((len(restaurants), len(dorms)), dtype=int)
+        idx_r = {r: i for i, r in enumerate(restaurants)}
+        idx_d = {d: j for j, d in enumerate(dorms)}
+
+        for order in self.all_orders:
+            r = order.restaurant
+            d = order.dormitory
+            if r in idx_r and d in idx_d:
+                matrix[idx_r[r], idx_d[d]] += 1
+
+        # 绘图
+        fig, ax = plt.subplots(figsize=(6.5, 5.5))
+        im = ax.imshow(matrix, cmap='YlOrRd')
+
+        # 轴标签与刻度
+        ax.set_xticks(range(len(dorms)))
+        ax.set_yticks(range(len(restaurants)))
+        # 将 D1-D3 显示为 S1-S3
+        xlabels = [f"S{j+1}" for j in range(len(dorms))]
+        ylabels = restaurants
+        ax.set_xticklabels(xlabels)
+        ax.set_yticklabels(ylabels)
+
+        # 注释数值
+        for i in range(matrix.shape[0]):
+            for j in range(matrix.shape[1]):
+                ax.text(j, i, f"{matrix[i, j]}", ha='center', va='center',
+                        color='black', fontsize=10)
+
+        ax.set_xlabel("Destination (S1-S3)")
+        ax.set_ylabel("Origin (R1-R3)")
+        ax.set_title("Spatial OD Heatmap (R → S)", fontsize=12, fontweight='bold')
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label("Order Volume")
+
+        plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"OD矩阵热力图已保存: {save_path}")
+        if show:
+            plt.show()
+
+        return fig
+
+    def plot_sensitivity_comparison(self, save_path: str = None, show: bool = True):
+        """
+        灵敏度/鲁棒性对比图：Scenario A (正常) vs Scenario B (无无人机/恶劣天气)
+
+        左轴为平均成本 Avg Cost；右轴为 On-time Rate (%)。
+        使用同一批订单确保可比性。
+        """
+        # 使用同一批订单
+        orders = self.all_orders
+        if not orders:
+            print("无订单数据，无法绘制灵敏度对比图")
+            return
+
+        # 备份原始车队与速度配置
+        import copy
+        original_fleet = copy.deepcopy(config.FLEET_CONFIG)
+
+        # Scenario A: 正常
+        from simulator import Environment
+        orders_a = copy.deepcopy(orders)
+        env_a = Environment(orders=orders_a, verbose=False)
+        results_a = env_a.run()
+        kpis_a = results_a["statistics"].get_kpis()
+
+        # Scenario B: 无无人机 + 恶劣天气（行程时间更慢）
+        try:
+            config.FLEET_CONFIG[config.AGENT_TYPE_DRONE]["count"] = 0
+            # 恶劣天气：人类与AGV速度变慢（倍数增大）
+            config.FLEET_CONFIG[config.AGENT_TYPE_HUMAN]["speed_multiplier"] = max(
+                1.0, original_fleet[config.AGENT_TYPE_HUMAN]["speed_multiplier"] * 1.2
+            )
+            config.FLEET_CONFIG[config.AGENT_TYPE_AGV]["speed_multiplier"] = max(
+                1.0, original_fleet[config.AGENT_TYPE_AGV]["speed_multiplier"] * 1.25
+            )
+
+            orders_b = copy.deepcopy(orders)
+            env_b = Environment(orders=orders_b, verbose=False)
+            results_b = env_b.run()
+            kpis_b = results_b["statistics"].get_kpis()
+        finally:
+            # 恢复原始配置
+            config.FLEET_CONFIG = original_fleet
+
+        # 数据
+        scenarios = ["Scenario A\n(Normal)", "Scenario B\n(No Drones / Bad Weather)"]
+        avg_costs = [kpis_a["avg_cost_per_order"], kpis_b["avg_cost_per_order"]]
+        on_time_rates = [kpis_a["on_time_rate"], kpis_b["on_time_rate"]]
+
+        # 绘图（双轴分组柱状）
+        x = np.arange(len(scenarios))
+        width = 0.38
+
+        fig, ax1 = plt.subplots(figsize=(8, 6))
+        ax2 = ax1.twinx()
+
+        bars1 = ax1.bar(x - width/2, avg_costs, width, label='Avg Cost',
+                         color='#3498db', edgecolor='black')
+        bars2 = ax2.bar(x + width/2, on_time_rates, width, label='On-time Rate (%)',
+                         color='#2ecc71', edgecolor='black')
+
+        # 标签与刻度
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(scenarios)
+        ax1.set_ylabel("Avg Cost", color='#3498db')
+        ax2.set_ylabel("On-time Rate (%)", color='#2ecc71')
+        ax1.set_title("Sensitivity Comparison: Normal vs No Drones / Bad Weather",
+                      fontsize=12, fontweight='bold')
+        ax1.grid(axis='y', alpha=0.3)
+
+        # 数值标注
+        for b in bars1:
+            h = b.get_height()
+            ax1.annotate(f"{h:.3f}", xy=(b.get_x()+b.get_width()/2, h),
+                         xytext=(0,3), textcoords='offset points', ha='center', fontsize=10)
+        for b in bars2:
+            h = b.get_height()
+            ax2.annotate(f"{h:.1f}%", xy=(b.get_x()+b.get_width()/2, h),
+                         xytext=(0,3), textcoords='offset points', ha='center', fontsize=10)
+
+        # 合并图例
+        lines = [bars1, bars2]
+        labels = [l.get_label() for l in lines]
+        ax1.legend(lines, labels, loc='upper left')
+
+        plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"灵敏度对比图已保存: {save_path}")
+        if show:
+            plt.show()
+
+        return fig
+
     def _plot_demand_heatmap(self, ax):
         """
         Plot demand heatmap (bar chart)
